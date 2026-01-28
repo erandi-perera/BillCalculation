@@ -26,6 +26,12 @@ namespace BillCalculation.Models
         public int ToUnits { get; set; }
         public int BlockLimit { get; set; }
         public decimal Rate { get; set; }
+
+        // Fixed charge fields
+        public string TypeFixed { get; set; }      // "S" or "V"
+        public string BasicBlock { get; set; }     // "BA" or "BL"
+        public string MinCharge { get; set; }      // "Y" or "N"
+        public decimal FixCharge { get; set; }     // Fixed charge amount
     }
 
     /// <summary>
