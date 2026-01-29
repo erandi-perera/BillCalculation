@@ -40,8 +40,10 @@ namespace BillCalculation.DAL
                     using (var cmd = new OleDbCommand(sql, conn))
                     {
                         cmd.Parameters.AddWithValue("@category", category);
-                        cmd.Parameters.AddWithValue("@toDate", toDate.ToString("yyyy-MM-dd"));
-                        cmd.Parameters.AddWithValue("@fromDate", fromDate.ToString("yyyy-MM-dd"));
+                        //cmd.Parameters.AddWithValue("@toDate", toDate.ToString("yyyy-MM-dd"));
+                        //cmd.Parameters.AddWithValue("@fromDate", fromDate.ToString("yyyy-MM-dd"));
+                        cmd.Parameters.AddWithValue("@toDate", toDate.ToString("dd-MM-yyyy"));
+                        cmd.Parameters.AddWithValue("@fromDate", fromDate.ToString("dd-MM-yyyy"));
 
                         using (var reader = cmd.ExecuteReader())
                         {
@@ -89,8 +91,10 @@ namespace BillCalculation.DAL
                     using (var cmd = new OleDbCommand(sql, conn))
                     {
                         cmd.Parameters.AddWithValue("@category", category);
-                        cmd.Parameters.AddWithValue("@effectiveFrom", effectiveDate.ToString("yyyy-MM-dd"));
-                        cmd.Parameters.AddWithValue("@effectiveTo", effectiveDate.ToString("yyyy-MM-dd"));
+                        //cmd.Parameters.AddWithValue("@effectiveFrom", effectiveDate.ToString("yyyy-MM-dd"));
+                        //cmd.Parameters.AddWithValue("@effectiveTo", effectiveDate.ToString("yyyy-MM-dd"));
+                        cmd.Parameters.AddWithValue("@effectiveFrom", effectiveDate.ToString("dd-MM-yyyy"));
+                        cmd.Parameters.AddWithValue("@effectiveTo", effectiveDate.ToString("dd-MM-yyyy"));
 
                         using (var reader = cmd.ExecuteReader())
                         {
@@ -120,7 +124,13 @@ namespace BillCalculation.DAL
                                     FromUnits = fromUnits,
                                     ToUnits = toUnits,
                                     BlockLimit = blockLimit,
-                                    Rate = reader["rate"] != DBNull.Value ? Convert.ToDecimal(reader["rate"]) : 0
+                                    Rate = reader["rate"] != DBNull.Value ? Convert.ToDecimal(reader["rate"]) : 0,
+
+                                    // Fixed charge fields
+                                    TypeFixed = reader["type_fixed"] != DBNull.Value ? reader["type_fixed"].ToString() : "",
+                                    BasicBlock = reader["block_basic"] != DBNull.Value ? reader["block_basic"].ToString() : "",
+                                    MinCharge = reader["min_chrge"] != DBNull.Value ? reader["min_chrge"].ToString() : "",
+                                    FixCharge = reader["fixed_charge"] != DBNull.Value ? Convert.ToDecimal(reader["fixed_charge"]) : 0
                                 });
                             }
                         }
@@ -199,7 +209,8 @@ namespace BillCalculation.DAL
                     {
                         // Safety check: if no balance days remain, assign all remaining units
                         unitsInPeriod = balanceUnits;
-                        System.Diagnostics.Trace.WriteLine($"Warning: balanceDays is {balanceDays} for category {request.Category}, assigning remaining {balanceUnits} units to period {periodStart:yyyy-MM-dd} to {periodEnd:yyyy-MM-dd}");
+                        //System.Diagnostics.Trace.WriteLine($"Warning: balanceDays is {balanceDays} for category {request.Category}, assigning remaining {balanceUnits} units to period {periodStart:yyyy-MM-dd} to {periodEnd:yyyy-MM-dd}");
+                        System.Diagnostics.Trace.WriteLine($"Warning: balanceDays is {balanceDays} for category {request.Category}, assigning remaining {balanceUnits} units to period {periodStart:dd-MM-yyyy} to {periodEnd:dd-MM-yyyy}");
                     }
                     else
                     {
@@ -233,7 +244,7 @@ namespace BillCalculation.DAL
                     // Period 2025-06-12 onwards → Use 12.75
                     decimal specialRateForPeriod = 0;
                     if (request.Category == 11)
-                    { 
+                    {
                         DateTime specialRate25EndDate = new DateTime(2024, 7, 15);
                         DateTime specialRate15StartDate = new DateTime(2024, 7, 16);
                         DateTime specialRate15EndDate = new DateTime(2025, 1, 17);
@@ -356,6 +367,10 @@ namespace BillCalculation.DAL
                     }
 
                     periodCalc.KWHCharge = Math.Round(periodTotalCharge, 2);
+
+                    // Calculate fixed charge for this period 
+                    periodCalc.FixedCharge = CalculateFixedCharge(tariffBlocks, daysInPeriod, periodCalc.NumberOfUnits, request.Category);
+
                     result.PeriodCalculations.Add(periodCalc);
 
                     // Update balance for next period
@@ -367,7 +382,8 @@ namespace BillCalculation.DAL
 
                 // Calculate grand totals
                 result.KWHCharge = Math.Round(result.PeriodCalculations.Sum(p => p.KWHCharge), 2);
-                result.TotalCharge = result.KWHCharge; // Add fixed charges if needed
+                result.FixedCharge = Math.Round(result.PeriodCalculations.Sum(p => p.FixedCharge), 2);
+                result.TotalCharge = result.KWHCharge + result.FixedCharge; // Add FAC charge later if needed
 
                 return result;
             }
@@ -412,6 +428,89 @@ namespace BillCalculation.DAL
                 System.Diagnostics.Trace.WriteLine($"Error in GetBillSummary: {ex.Message}");
                 throw;
             }
+        }
+
+        /// <summary>
+        /// Calculate fixed charge for a period based on tariff type
+        /// </summary>
+        private decimal CalculateFixedCharge(List<TariffInfo> tariffBlocks, int daysInPeriod, decimal unitsInPeriod, int category)
+        {
+            if (tariffBlocks == null || tariffBlocks.Count == 0)
+                return 0;
+
+            // Calculate number of months
+            decimal noMonths = daysInPeriod / 30.0m;
+
+            var firstBlock = tariffBlocks[0];
+
+            // Calculate monthly equivalent consumption for threshold check
+            decimal monthlyEquivalentConsumption = (unitsInPeriod * 30) / daysInPeriod;
+
+            // Determine if this is high consumption for flat-rate categories
+            bool isCategory21Or41HighConsumption = (category == 21 || category == 41) && monthlyEquivalentConsumption > 300;
+            bool isCategory31Or33HighConsumption = (category == 31 || category == 33) && monthlyEquivalentConsumption > 180;
+            bool isHighConsumption = isCategory21Or41HighConsumption || isCategory31Or33HighConsumption;
+
+            // For flat-rate categories (21, 31, 33, 41), select the appropriate fixed charge based on consumption
+            if (category == 21 || category == 31 || category == 33 || category == 41)
+            {
+                foreach (var tariff in tariffBlocks)
+                {
+                    if (isHighConsumption && tariff.ToUnits == 0)
+                    {
+                        // High consumption - use fixed charge from the unlimited block (typically higher rate)
+                        return noMonths * tariff.FixCharge;
+                    }
+                    else if (!isHighConsumption && tariff.ToUnits > 0)
+                    {
+                        // Low consumption - use fixed charge from the first block (typically lower rate)
+                        return noMonths * tariff.FixCharge;
+                    }
+                }
+
+                // Fallback to first block if no match found
+                return noMonths * firstBlock.FixCharge;
+            }
+
+            // Type S (Single) - Simple fixed charge (for categories 11, 51, etc.)
+            if (firstBlock.TypeFixed == "S" && firstBlock.BasicBlock == "BL" && firstBlock.MinCharge == "N")
+            {
+                return noMonths * firstBlock.FixCharge;
+            }
+
+            // Type BA (Basic All) - Single rate for all units
+            if (firstBlock.BasicBlock == "BA" && firstBlock.MinCharge == "N")
+            {
+                return noMonths * firstBlock.FixCharge;
+            }
+
+            // Type V (Variable) - Block-based fixed charge (for categories 11, 51, etc.)
+            if (firstBlock.TypeFixed == "V" && firstBlock.BasicBlock == "BL" && firstBlock.MinCharge == "N")
+            {
+                decimal totBlockUnits = 0;
+                decimal fixedCharge = 0;
+
+                foreach (var tariff in tariffBlocks)
+                {
+                    // Calculate prorated block units
+                    int proratedBlockLimit = tariff.BlockLimit == 0 ? 0 :
+                        (int)Math.Ceiling((tariff.BlockLimit * daysInPeriod / 30.0));
+
+                    totBlockUnits += proratedBlockLimit;
+
+                    // If accumulated block units cover the consumption
+                    if (totBlockUnits >= unitsInPeriod || tariff.ToUnits == 0)
+                    {
+                        fixedCharge = noMonths * tariff.FixCharge;
+                        break;
+                    }
+                }
+
+                return fixedCharge;
+            }
+
+            // Default case
+            return noMonths * firstBlock.FixCharge;
         }
     }
 }
