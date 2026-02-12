@@ -40,10 +40,10 @@ namespace BillCalculation.DAL
                     using (var cmd = new OleDbCommand(sql, conn))
                     {
                         cmd.Parameters.AddWithValue("@category", category);
-                        //cmd.Parameters.AddWithValue("@toDate", toDate.ToString("yyyy-MM-dd"));
-                        //cmd.Parameters.AddWithValue("@fromDate", fromDate.ToString("yyyy-MM-dd"));
-                        cmd.Parameters.AddWithValue("@toDate", toDate.ToString("dd-MM-yyyy"));
-                        cmd.Parameters.AddWithValue("@fromDate", fromDate.ToString("dd-MM-yyyy"));
+                        cmd.Parameters.AddWithValue("@toDate", toDate.ToString("yyyy-MM-dd"));
+                        cmd.Parameters.AddWithValue("@fromDate", fromDate.ToString("yyyy-MM-dd"));
+                        //cmd.Parameters.AddWithValue("@toDate", toDate.ToString("dd-MM-yyyy"));
+                        //cmd.Parameters.AddWithValue("@fromDate", fromDate.ToString("dd-MM-yyyy"));
 
                         using (var reader = cmd.ExecuteReader())
                         {
@@ -91,10 +91,10 @@ namespace BillCalculation.DAL
                     using (var cmd = new OleDbCommand(sql, conn))
                     {
                         cmd.Parameters.AddWithValue("@category", category);
-                        //cmd.Parameters.AddWithValue("@effectiveFrom", effectiveDate.ToString("yyyy-MM-dd"));
-                        //cmd.Parameters.AddWithValue("@effectiveTo", effectiveDate.ToString("yyyy-MM-dd"));
-                        cmd.Parameters.AddWithValue("@effectiveFrom", effectiveDate.ToString("dd-MM-yyyy"));
-                        cmd.Parameters.AddWithValue("@effectiveTo", effectiveDate.ToString("dd-MM-yyyy"));
+                        cmd.Parameters.AddWithValue("@effectiveFrom", effectiveDate.ToString("yyyy-MM-dd"));
+                        cmd.Parameters.AddWithValue("@effectiveTo", effectiveDate.ToString("yyyy-MM-dd"));
+                        //cmd.Parameters.AddWithValue("@effectiveFrom", effectiveDate.ToString("dd-MM-yyyy"));
+                        //cmd.Parameters.AddWithValue("@effectiveTo", effectiveDate.ToString("dd-MM-yyyy"));
 
                         using (var reader = cmd.ExecuteReader())
                         {
@@ -186,6 +186,14 @@ namespace BillCalculation.DAL
                     // Calculate days in this period
                     int daysInPeriod = (periodEnd - periodStart).Days;
 
+                    // BUGFIX: Skip periods with 0 or negative days (no overlap)
+                    // This prevents divide-by-zero errors when fromDate falls on the last day of a tariff period
+                    if (daysInPeriod <= 0)
+                    {
+                        System.Diagnostics.Trace.WriteLine($"Skipping period with {daysInPeriod} days: {periodStart:yyyy-MM-dd} to {periodEnd:yyyy-MM-dd}");
+                        continue;
+                    }
+
                     // Add 1 to the first day calculation ONLY if:
                     // 1. This is the start of the tariff period (periodStart == period.EffectiveFrom)
                     // 2. AND the user's fromDate is DIFFERENT from the tariff period start
@@ -209,8 +217,8 @@ namespace BillCalculation.DAL
                     {
                         // Safety check: if no balance days remain, assign all remaining units
                         unitsInPeriod = balanceUnits;
-                        //System.Diagnostics.Trace.WriteLine($"Warning: balanceDays is {balanceDays} for category {request.Category}, assigning remaining {balanceUnits} units to period {periodStart:yyyy-MM-dd} to {periodEnd:yyyy-MM-dd}");
-                        System.Diagnostics.Trace.WriteLine($"Warning: balanceDays is {balanceDays} for category {request.Category}, assigning remaining {balanceUnits} units to period {periodStart:dd-MM-yyyy} to {periodEnd:dd-MM-yyyy}");
+                        System.Diagnostics.Trace.WriteLine($"Warning: balanceDays is {balanceDays} for category {request.Category}, assigning remaining {balanceUnits} units to period {periodStart:yyyy-MM-dd} to {periodEnd:yyyy-MM-dd}");
+                        //System.Diagnostics.Trace.WriteLine($"Warning: balanceDays is {balanceDays} for category {request.Category}, assigning remaining {balanceUnits} units to period {periodStart:dd-MM-yyyy} to {periodEnd:dd-MM-yyyy}");
                     }
                     else
                     {
@@ -437,6 +445,13 @@ namespace BillCalculation.DAL
         {
             if (tariffBlocks == null || tariffBlocks.Count == 0)
                 return 0;
+
+            // BUGFIX: Safety check to prevent division by zero
+            if (daysInPeriod <= 0)
+            {
+                System.Diagnostics.Trace.WriteLine($"Warning: daysInPeriod is {daysInPeriod}, returning 0 for fixed charge");
+                return 0;
+            }
 
             // Calculate number of months
             decimal noMonths = daysInPeriod / 30.0m;
